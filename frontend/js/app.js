@@ -807,10 +807,33 @@ function initApp() {
     maintDateInput.value = localNow.toISOString().slice(0, 16);
   }
 
-  // Poll stats every 30s as fallback when idle
-  setInterval(() => {
-    if (currentUser) loadDashboardStats();
-  }, 30000);
+  // Poll stats every 5s — reliable always-on fallback regardless of WS/SSE state
+  let _lastPollTs = null;
+  setInterval(async () => {
+    if (!currentUser) return;
+    try {
+      const resp = await fetch(`${API}/api/dashboard/stats`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      // Only update UI if data has actually changed (avoid flicker on same timestamp)
+      if (data.last_updated === _lastPollTs) return;
+      _lastPollTs = data.last_updated;
+      updateKPIs({
+        light_intensity: data.latest_light,
+        temperature:     data.latest_temperature,
+        humidity:        data.latest_humidity,
+        voltage:         data.latest_voltage,
+        current:         data.latest_current,
+        power:           data.latest_power,
+        energy:          data.latest_energy,
+        degradation_pct: data.current_degradation,
+        needs_cleaning:  data.cleaning_needed,
+        cleaning_conf:   data.cleaning_confidence,
+        timestamp:       data.last_updated,
+      });
+      updateAlertBell(data.unread_alerts);
+    } catch(e) { /* backend unreachable, skip silently */ }
+  }, 5000);
 
   console.log("[App] Smart Solar Plug dashboard initialized.");
 }
