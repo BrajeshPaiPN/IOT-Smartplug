@@ -102,15 +102,37 @@ async function handleAuthSubmit(e) {
 
 async function handleGoogleLogin() {
   const errorMsg = document.getElementById("authErrorMessage");
+  const googleBtn = document.getElementById("googleSignInBtn");
+
   try {
     errorMsg.style.display = "none";
+
+    // Show loading state while waiting for Firebase to initialize
+    if (googleBtn) {
+      googleBtn.disabled = true;
+      googleBtn.innerHTML = `<span style="display:flex;align-items:center;gap:8px;justify-content:center">
+        <svg width="18" height="18" viewBox="0 0 38 38" xmlns="http://www.w3.org/2000/svg" stroke="currentColor">
+          <g fill="none" fill-rule="evenodd"><g transform="translate(1 1)" stroke-width="2">
+          <circle stroke-opacity=".3" cx="18" cy="18" r="18"/>
+          <path d="M36 18c0-9.94-8.06-18-18-18"><animateTransform attributeName="transform" type="rotate" from="0 18 18" to="360 18 18" dur="0.8s" repeatCount="indefinite"/></path>
+          </g></g></svg>
+        Connecting...</span>`;
+    }
+
     const result = await signInWithGoogle();
     const email = result.user ? result.user.email : "user";
     showToast("🔐 Google Sign-In", `Logged in as ${email}`, "success");
   } catch (err) {
     console.error("Google login error:", err);
-    errorMsg.textContent = err.message || "Failed to sign in with Google.";
+    const msg = err.message || "Failed to sign in with Google.";
+    errorMsg.textContent = msg;
     errorMsg.style.display = "block";
+  } finally {
+    // Always restore button
+    if (googleBtn) {
+      googleBtn.disabled = false;
+      googleBtn.innerHTML = `<img src="https://www.google.com/favicon.ico" width="18" height="18" style="vertical-align:middle;margin-right:8px"> Sign In with Google`;
+    }
   }
 }
 

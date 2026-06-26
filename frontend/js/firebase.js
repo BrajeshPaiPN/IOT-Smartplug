@@ -261,18 +261,43 @@ async function initFirebase() {
 
 // ── Auth helper functions ────────────────────────────────────────────────────
 
-function signInWithEmail(email, password) {
-  if (!firebaseInitialized) return Promise.reject("Firebase not initialized yet.");
+/**
+ * Wait up to maxWaitMs for Firebase to finish initializing.
+ * Resolves true if ready, resolves false if timed out.
+ */
+function waitForFirebase(maxWaitMs = 10000) {
+  if (firebaseInitialized) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const interval = 200;
+    let elapsed = 0;
+    const check = setInterval(() => {
+      elapsed += interval;
+      if (firebaseInitialized) {
+        clearInterval(check);
+        resolve(true);
+      } else if (elapsed >= maxWaitMs) {
+        clearInterval(check);
+        resolve(false);
+      }
+    }, interval);
+  });
+}
+
+async function signInWithEmail(email, password) {
+  const ready = await waitForFirebase();
+  if (!ready) return Promise.reject(new Error("Backend not reachable. Please check that the backend is running and try again."));
   return firebase.auth().signInWithEmailAndPassword(email, password);
 }
 
-function signUpWithEmail(email, password) {
-  if (!firebaseInitialized) return Promise.reject("Firebase not initialized yet.");
+async function signUpWithEmail(email, password) {
+  const ready = await waitForFirebase();
+  if (!ready) return Promise.reject(new Error("Backend not reachable. Please check that the backend is running and try again."));
   return firebase.auth().createUserWithEmailAndPassword(email, password);
 }
 
-function signInWithGoogle() {
-  if (!firebaseInitialized) return Promise.reject("Firebase not initialized yet.");
+async function signInWithGoogle() {
+  const ready = await waitForFirebase();
+  if (!ready) return Promise.reject(new Error("Backend not reachable. Please check that the backend is running and try again."));
   const provider = new firebase.auth.GoogleAuthProvider();
   return firebase.auth().signInWithPopup(provider);
 }
