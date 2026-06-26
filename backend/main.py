@@ -4,6 +4,7 @@ All API endpoints + WebSocket + Firebase listener integration.
 """
 
 import asyncio
+from asyncio import Queue
 import json
 import os
 from contextlib import asynccontextmanager
@@ -30,11 +31,11 @@ from telemetry_processor import register_callback
 from mqtt_listener import start_mqtt_listener, stop_mqtt_listener
 from report_generator import generate_csv, generate_pdf
 
-# ─── WebSocket Manager ────────────────────────────────────────────────────────
 
 class ConnectionManager:
     def __init__(self):
         self.active: List[WebSocket] = []
+        self.sse_queues: List[Queue] = []  # SSE subscriber queues
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
@@ -44,7 +45,17 @@ class ConnectionManager:
         if ws in self.active:
             self.active.remove(ws)
 
+    def add_sse_subscriber(self) -> Queue:
+        q = Queue(maxsize=50)
+        self.sse_queues.append(q)
+        return q
+
+    def remove_sse_subscriber(self, q: Queue):
+        if q in self.sse_queues:
+            self.sse_queues.remove(q)
+
     async def broadcast(self, message: str):
+        # Broadcast to WebSocket clients
         dead = []
         for ws in self.active:
             try:
@@ -53,6 +64,16 @@ class ConnectionManager:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(ws)
+        # Broadcast to SSE subscribers
+        dead_sse = []
+        for q in self.sse_queues:
+            try:
+                if not q.full():
+                    q.put_nowait(message)
+            except Exception:
+                dead_sse.append(q)
+        for q in dead_sse:
+            self.remove_sse_subscriber(q)
 
 manager = ConnectionManager()
 
@@ -63,18 +84,16 @@ _main_loop = None
 def _sync_broadcast(payload: dict):
     """Called by background threads (MQTT/Firebase) to schedule coroutines on the main loop."""
     global _main_loop
-    with open("broadcast_log.txt", "a") as f:
-        if _main_loop and _main_loop.is_running():
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    manager.broadcast(json.dumps(payload, default=str)),
-                    _main_loop
-                )
-                f.write(f"[{datetime.now()}] [WS] Broadcast scheduled successfully.\n")
-            except Exception as e:
-                f.write(f"[{datetime.now()}] [WS] Broadcast failed: {e}\n")
-        else:
-            f.write(f"[{datetime.now()}] [WS] Broadcast skipped: main loop not ready.\n")
+    if _main_loop and _main_loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast(json.dumps(payload, default=str)),
+                _main_loop
+            )
+        except Exception as e:
+            print(f"[WS] Broadcast failed: {e}")
+    else:
+        print(f"[WS] Broadcast skipped: main loop not ready.")
 
 # ─── App Lifecycle ────────────────────────────────────────────────────────────
 
@@ -132,16 +151,56 @@ app.add_middleware(
 
 @app.websocket("/ws/live")
 async def websocket_endpoint(websocket: WebSocket):
-    """Real-time telemetry push via WebSocket."""
+    """Real-time telemetry push via WebSocket with heartbeat."""
     await manager.connect(websocket)
     try:
         while True:
-            # We must receive to keep the connection alive and detect disconnects
-            data = await websocket.receive_text()
+            # Race: either the client sends something, or we send a heartbeat every 20s
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=20.0)
+            except asyncio.TimeoutError:
+                # Send a ping to keep the connection alive
+                try:
+                    await websocket.send_text(json.dumps({"type": "ping"}))
+                except Exception:
+                    break
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        pass
     except Exception:
+        pass
+    finally:
         manager.disconnect(websocket)
+
+# ─── Server-Sent Events (SSE) Endpoint — reliable browser-native fallback ─────
+
+@app.get("/api/telemetry/stream")
+async def telemetry_stream():
+    """SSE stream: browser auto-reconnects if connection drops."""
+    queue = manager.add_sse_subscriber()
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {message}\n\n"
+                except asyncio.TimeoutError:
+                    # Send a keep-alive comment so browser doesn't disconnect
+                    yield ": keep-alive\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            manager.remove_sse_subscriber(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 # ─── Config Endpoint ────────────────────────────────────────────────────────────
 

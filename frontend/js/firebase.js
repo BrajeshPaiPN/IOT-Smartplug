@@ -7,11 +7,14 @@
 // API Endpoint configuration
 const API_URL = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws/live";
+const SSE_URL = "http://localhost:8000/api/telemetry/stream";
 
 let wsConnection = null;
 let wsReconnectTimer = null;
+let sseConnection = null;
 let isFirebaseConnected = false;
 let isWsConnected = false;
+let isSseConnected = false;
 let firebaseInitialized = false;
 
 // ── Mock Firebase Fallback for Offline / Sandbox Testing ─────────────────────
@@ -90,10 +93,16 @@ if (typeof firebase === "undefined") {
 const dataListeners = [];
 const authListeners = [];
 
+let _lastDispatchTs = null; // For deduplication between WS + SSE
+
 function onLiveData(fn) { dataListeners.push(fn); }
 function onAuthStateChangedListener(fn) { authListeners.push(fn); }
 
 function _dispatch(data) {
+  // Deduplicate: skip if we already dispatched the same timestamp within 1s
+  const ts = data.timestamp || null;
+  if (ts && ts === _lastDispatchTs) return;
+  _lastDispatchTs = ts;
   dataListeners.forEach(fn => {
     try { fn(data); } catch(e) { console.error("Listener error:", e); }
   });
@@ -122,26 +131,61 @@ function connectWebSocket() {
     wsConnection.onmessage = (evt) => {
       try {
         const data = JSON.parse(evt.data);
+        if (data.type === "ping") return; // ignore heartbeats
         _dispatch(data);
       } catch(e) { console.warn("[WS] Bad message:", e); }
     };
 
     wsConnection.onclose = () => {
       isWsConnected = false;
-      updateConnectionStatus(false);
+      if (!isSseConnected) updateConnectionStatus(false);
       console.warn("[WS] Disconnected. Reconnecting in 5s...");
       wsReconnectTimer = setTimeout(connectWebSocket, 5000);
     };
 
     wsConnection.onerror = (e) => {
       console.warn("[WS] Error:", e);
+      isWsConnected = false;
       wsConnection.close();
     };
 
   } catch(e) {
     console.error("[WS] Failed to connect:", e);
-    updateConnectionStatus(false);
     wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+  }
+}
+
+// ── SSE (Server-Sent Events) — browser-native auto-reconnect fallback ───────────
+function connectSSE() {
+  if (sseConnection) { sseConnection.close(); }
+
+  try {
+    sseConnection = new EventSource(SSE_URL);
+
+    sseConnection.onopen = () => {
+      isSseConnected = true;
+      console.log("[SSE] Connected to backend stream.");
+      updateConnectionStatus(true);
+    };
+
+    sseConnection.onmessage = (evt) => {
+      try {
+        const data = JSON.parse(evt.data);
+        if (data.type === "ping") return; // ignore heartbeats
+        // Only update UI if WebSocket hasn't already handled this (dedup by type check)
+        _dispatch(data);
+      } catch(e) { console.warn("[SSE] Bad message:", e); }
+    };
+
+    sseConnection.onerror = () => {
+      isSseConnected = false;
+      if (!isWsConnected) updateConnectionStatus(false);
+      console.warn("[SSE] Connection error. Browser will auto-reconnect...");
+      // EventSource auto-reconnects natively — no manual timer needed
+    };
+
+  } catch(e) {
+    console.error("[SSE] Failed to connect:", e);
   }
 }
 
@@ -258,6 +302,7 @@ function updateConnectionStatus(connected) {
 
 // ── Bootstrap Connections ────────────────────────────────────────────────────
 function initConnections() {
-  connectWebSocket();
-  initFirebase();
+  connectWebSocket();   // Fastest live channel
+  connectSSE();         // Reliable browser-native fallback (auto-reconnects)
+  initFirebase();       // Firebase RTDB listener + Auth
 }
