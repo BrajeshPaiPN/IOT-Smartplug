@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Solar Plug — IoT Monitoring Dashboard</title>
+  <meta name="description" content="Real-time IoT solar panel monitoring dashboard with ML-powered cleaning alerts, degradation analysis, and professional reports. Powered by ESP32, Firebase, FastAPI." />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- Chart.js Annotation plugin (threshold lines on degradation chart) -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+
+  <!-- Firebase SDK (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+
+  <!-- Main CSS -->
+  <link rel="stylesheet" href="css/style.css" />
+
+  <!-- Favicon inline -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☀️</text></svg>" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     NAVIGATION BAR
+══════════════════════════════════════════════════════════ -->
+<nav class="navbar" id="mainNavbar" style="display:none" role="navigation" aria-label="Main navigation">
+  <div class="navbar-brand">
+    <div class="brand-icon" aria-hidden="true">☀</div>
+    <span>Smart Solar Plug</span>
+  </div>
+
+  <ul class="navbar-nav" role="menubar">
+    <li role="none">
+      <a class="nav-link active" role="menuitem" data-view="view-dashboard" 
+         onclick="showView('view-dashboard')" href="javascript:void(0)" id="nav-dashboard">
+        📊 Dashboard
+      </a>
+    </li>
+    <li role="none">
+      <a class="nav-link" role="menuitem" data-view="view-history" 
+         onclick="showView('view-history')" href="javascript:void(0)" id="nav-history">
+        📈 History
+      </a>
+    </li>
+    <li role="none">
+      <a class="nav-link" role="menuitem" data-view="view-alerts" 
+         onclick="showView('view-alerts')" href="javascript:void(0)" id="nav-alerts">
+        🔔 Alerts
+      </a>
+    </li>
+    <li role="none">
+      <a class="nav-link" role="menuitem" data-view="view-degradation" 
+         onclick="showView('view-degradation')" href="javascript:void(0)" id="nav-degradation">
+        📉 Degradation
+      </a>
+    </li>
+    <li role="none">
+      <a class="nav-link" role="menuitem" data-view="view-reports" 
+         onclick="showView('view-reports')" href="javascript:void(0)" id="nav-reports">
+        📄 Reports
+      </a>
+    </li>
+  </ul>
+
+  <div class="navbar-right">
+    <!-- User Profile & Logout -->
+    <div class="user-profile-widget" id="userProfileWidget" style="display:none; margin-right: 15px; display: flex; align-items: center;">
+      <span class="user-avatar" id="userAvatar" style="width: 28px; height: 28px; border-radius: 50%; background: #EFF6FF; border: 1px solid #2563EB; color: #2563EB; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; margin-right: 8px;">U</span>
+      <span class="user-email" id="userEmailText" style="font-size: 13px; font-weight: 500; color: #4B5563; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+      <button class="btn btn-outline btn-sm" onclick="handleLogout()" id="logoutBtn" style="margin-left: 10px; padding: 4px 8px; font-size: 11px;">Logout</button>
+    </div>
+    <!-- Live connection badge -->
+    <div class="connection-badge disconnected" id="connectionBadge" role="status" aria-live="polite">
+      <div class="connection-dot" id="connectionDot"></div>
+      <span id="connectionText">Connecting…</span>
+    </div>
+    <!-- Alert bell -->
+    <button class="alert-bell" id="alertBellBtn" onclick="showView('view-alerts')"
+            aria-label="View alerts">
+      🔔
+      <span class="alert-badge" id="alertBadge" style="display:none">0</span>
+    </button>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════
+     MAIN CONTENT
+══════════════════════════════════════════════════════════ -->
+<main class="main-content" role="main">
+
+  <!-- ──────────────────────────────────────────────────
+       VIEW 0: LOGIN & AUTHENTICATION
+  ────────────────────────────────────────────────── -->
+  <section id="view-login" class="view active" role="region" aria-label="Login">
+    <div class="login-container" style="display: flex; align-items: center; justify-content: center; min-height: 80vh; padding: 20px;">
+      <div class="login-card" style="background: white; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05); border: 1px solid #E5E7EB; width: 100%; max-width: 420px; padding: 32px; box-sizing: border-box;">
+        <div class="login-header" style="text-align: center; margin-bottom: 28px;">
+          <div class="login-logo" style="font-size: 48px; margin-bottom: 8px; animation: bounce 2s infinite;" aria-hidden="true">☀️</div>
+          <h2 style="font-size: 24px; font-weight: 700; color: #111827; margin: 0 0 6px 0;">Smart Solar Plug</h2>
+          <p id="loginSubtitle" style="font-size: 14px; color: #6B7280; margin: 0;">Sign in to monitor your solar energy generation</p>
+        </div>
+
+        <form id="loginForm" onsubmit="handleAuthSubmit(event)">
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label for="authEmail" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Email Address</label>
+            <input type="email" id="authEmail" required placeholder="Enter your email" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none; transition: border-color 0.2s;" />
+          </div>
+
+          <div class="form-group" style="margin-bottom: 20px;">
+            <label for="authPassword" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Password</label>
+            <input type="password" id="authPassword" required placeholder="Enter your password" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none; transition: border-color 0.2s;" />
+          </div>
+
+          <div id="authErrorMessage" class="auth-error-message" style="display:none; background: #FEF2F2; border: 1px solid #FCA5A5; color: #DC2626; padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; font-weight: 500; text-align: left;"></div>
+
+          <button type="submit" class="btn btn-primary btn-block" id="authSubmitBtn" style="width: 100%; padding: 12px; font-size: 14px; font-weight: 600; text-align: center; border-radius: 8px; cursor: pointer;">Sign In</button>
+        </form>
+
+        <div class="auth-divider" style="display: flex; align-items: center; text-align: center; margin: 20px 0; color: #9CA3AF; font-size: 12px; font-weight: 600;">
+          <div style="flex-grow: 1; height: 1px; background: #E5E7EB;"></div>
+          <span style="padding: 0 10px;">OR</span>
+          <div style="flex-grow: 1; height: 1px; background: #E5E7EB;"></div>
+        </div>
+
+        <button class="btn btn-outline btn-block" onclick="handleGoogleLogin()" style="width: 100%; padding: 11px; font-size: 14px; font-weight: 500; text-align: center; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; background: white; border: 1px solid #D1D5DB; color: #374151;">
+          <svg class="google-icon" viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg" style="margin-right: 8px;">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+          Sign In with Google
+        </button>
+
+        <div class="login-footer" style="text-align: center; margin-top: 24px; font-size: 13px; color: #6B7280;">
+          <p id="toggleAuthModeText" style="margin: 0;">Don't have an account? <a href="javascript:void(0)" onclick="toggleAuthMode()" style="color: #2563EB; font-weight: 500; text-decoration: none;">Register here</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────
+       VIEW 1: DASHBOARD
+  ────────────────────────────────────────────────── -->
+  <section id="view-dashboard" class="view" role="region" aria-label="Dashboard">
+    <div class="page-header">
+      <h1>Live Dashboard</h1>
+      <p>Real-time telemetry from your ESP32 solar monitoring plug.</p>
+      <div class="last-updated" aria-live="polite">
+        <div class="live-dot" aria-hidden="true"></div>
+        Last updated: <span id="lastUpdated">—</span> | Current time: <span id="currentTime">—</span>
+      </div>
+    </div>
+
+    <!-- Status Banner -->
+    <div class="status-banner neutral" id="statusBanner" role="alert" aria-live="assertive">
+      <div class="status-icon" id="bannerIcon">⏳</div>
+      <div class="status-text">
+        <h3 id="bannerTitle">Waiting for data…</h3>
+        <p id="bannerMsg">Connecting to Firebase RTDB via backend.</p>
+      </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="kpi-grid" aria-label="Key performance indicators">
+
+      <div class="kpi-card" style="--kpi-color:#F59E0B; --kpi-bg:#FFFBEB;"
+           title="Light Intensity from LDR sensor">
+        <div class="kpi-icon">☀️</div>
+        <div class="kpi-label">Light Intensity</div>
+        <div class="kpi-value" id="kpi-light">—<span class="kpi-unit">%</span></div>
+        <div class="kpi-trend">LDR sensor reading</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#DC2626; --kpi-bg:#FEF2F2;"
+           title="Ambient temperature from DHT11">
+        <div class="kpi-icon">🌡️</div>
+        <div class="kpi-label">Temperature</div>
+        <div class="kpi-value" id="kpi-temp">—<span class="kpi-unit">°C</span></div>
+        <div class="kpi-trend">DHT11 sensor</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#2563EB; --kpi-bg:#EFF6FF;"
+           title="Relative humidity from DHT11">
+        <div class="kpi-icon">💧</div>
+        <div class="kpi-label">Humidity</div>
+        <div class="kpi-value" id="kpi-humid">—<span class="kpi-unit">%</span></div>
+        <div class="kpi-trend">DHT11 sensor</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#7C3AED; --kpi-bg:#EDE9FE;"
+           title="AC Voltage from PZEM-004T">
+        <div class="kpi-icon">⚡</div>
+        <div class="kpi-label">Voltage</div>
+        <div class="kpi-value" id="kpi-volt">—<span class="kpi-unit">V</span></div>
+        <div class="kpi-trend">PZEM-004T</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#0891B2; --kpi-bg:#ECFEFF;"
+           title="Current from PZEM-004T">
+        <div class="kpi-icon">🔌</div>
+        <div class="kpi-label">Current</div>
+        <div class="kpi-value" id="kpi-curr">—<span class="kpi-unit">A</span></div>
+        <div class="kpi-trend">PZEM-004T</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#16A34A; --kpi-bg:#F0FDF4;"
+           title="Power from PZEM-004T">
+        <div class="kpi-icon">🔋</div>
+        <div class="kpi-label">Power</div>
+        <div class="kpi-value" id="kpi-power">—<span class="kpi-unit">W</span></div>
+        <div class="kpi-trend">PZEM-004T</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#16A34A; --kpi-bg:#F0FDF4;"
+           title="Cumulative energy from PZEM-004T">
+        <div class="kpi-icon">📊</div>
+        <div class="kpi-label">Energy</div>
+        <div class="kpi-value" id="kpi-energy">—<span class="kpi-unit">kWh</span></div>
+        <div class="kpi-trend">Cumulative</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#DC2626; --kpi-bg:#FEF2F2;"
+           title="Panel degradation estimated by ML model">
+        <div class="kpi-icon">📉</div>
+        <div class="kpi-label">Degradation</div>
+        <div class="kpi-value" id="kpi-degrad">—<span class="kpi-unit">%</span></div>
+        <div class="kpi-trend">ML model estimate</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#059669; --kpi-bg:#ECFDF5;"
+           title="CO2 offset and equivalent trees planted">
+        <div class="kpi-icon">🌱</div>
+        <div class="kpi-label">CO2 Offset</div>
+        <div class="kpi-value" id="kpi-co2">—<span class="kpi-unit">kg</span></div>
+        <div class="kpi-trend" id="kpi-trees">≈ 0 trees</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#059669; --kpi-bg:#ECFDF5;"
+           title="Estimated monthly electricity bill savings">
+        <div class="kpi-icon">💰</div>
+        <div class="kpi-label">Monthly Savings</div>
+        <div class="kpi-value" id="kpi-savings">—<span class="kpi-unit" id="currency-unit-1">₹</span></div>
+        <div class="kpi-trend" id="kpi-savings-detail">Based on panel rating</div>
+      </div>
+
+      <div class="kpi-card" style="--kpi-color:#2563EB; --kpi-bg:#EFF6FF;"
+           title="Payback time to recover solar installation cost">
+        <div class="kpi-icon">⏳</div>
+        <div class="kpi-label">Payback Period</div>
+        <div class="kpi-value" id="kpi-payback">—<span class="kpi-unit">yrs</span></div>
+        <div class="kpi-trend" id="kpi-payback-detail">ROI calculation</div>
+      </div>
+
+    </div>
+
+    <!-- Live Charts -->
+    <div class="chart-grid">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Environmental Sensors</div>
+            <div class="chart-subtitle">Temperature · Humidity · Light</div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="envChart" aria-label="Environment chart"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Electrical Parameters</div>
+            <div class="chart-subtitle">Power (W) · Voltage (V)</div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="powerChart" aria-label="Power chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Solar Parameter Settings -->
+    <div class="settings-card-container" style="margin-top: 24px;">
+      <div class="chart-card" style="padding: 24px;">
+        <div class="chart-header" style="margin-bottom: 20px;">
+          <div>
+            <div class="chart-title">☀️ Solar Parameters Configuration</div>
+            <div class="chart-subtitle">Input your panel rating and electricity cost to calculate CO2 offsets, monthly savings, and installation payback period.</div>
+          </div>
+        </div>
+
+        <form id="solarSettingsForm" onsubmit="handleSettingsSubmit(event)" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; align-items: end;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label for="settingsPanelRating" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Solar Panel Rating (Watts)</label>
+            <input type="number" id="settingsPanelRating" required min="1" step="any" value="300" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none;" />
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label for="settingsCostPerKwh" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Cost of Electricity per kWh (₹ or $)</label>
+            <input type="number" id="settingsCostPerKwh" required min="0.01" step="any" value="7.0" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none;" />
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label for="settingsInstallationCost" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Solar Installation Cost</label>
+            <input type="number" id="settingsInstallationCost" required min="0" step="any" value="25000" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none;" />
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label for="settingsSunlightHours" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Average Peak Sun Hours/Day</label>
+            <input type="number" id="settingsSunlightHours" required min="1" max="24" step="any" value="4.5" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none;" />
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label for="settingsLdrInverted" style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: #374151; cursor: pointer;">
+              <input type="checkbox" id="settingsLdrInverted" style="width: 16px; height: 16px; accent-color: #2563EB; cursor: pointer;" />
+              LDR Sensor Inverted
+            </label>
+            <div style="font-size: 11px; color: #6B7280; margin-top: 4px; padding-left: 24px;">Check if low voltage = high light.</div>
+          </div>
+
+          <div>
+            <button type="submit" class="btn btn-primary" id="saveSettingsBtn" style="padding: 10px 20px; font-size: 14px; font-weight: 600; border-radius: 8px; width: 100%; cursor: pointer;">Save Parameters</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ROI Upgrade Simulator Section -->
+    <div class="chart-grid" style="margin-top: 24px;">
+      <div class="chart-card" style="padding: 24px;">
+        <div class="chart-header" style="margin-bottom: 20px;">
+          <div>
+            <div class="chart-title">📈 Interactive Solar ROI &amp; Upgrade Simulator</div>
+            <div class="chart-subtitle">Simulate adding panels or projecting future electricity price inflation to see paybacks and cumulative savings.</div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          <div>
+            <label for="simUpgradeWatts" style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">
+              <span>Simulate Panel Upgrade (+Watts)</span>
+              <span id="simUpgradeWattsVal" style="font-weight: 700; color: #2563EB;">1000 W</span>
+            </label>
+            <input type="range" id="simUpgradeWatts" min="0" max="5000" step="100" value="1000" oninput="runRoiSimulation()" style="width: 100%; height: 6px; background: #E5E7EB; border-radius: 4px; outline: none; -webkit-appearance: none;" />
+          </div>
+
+          <div>
+            <label for="simInflation" style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">
+              <span>Annual Tariff Inflation Rate (%)</span>
+              <span id="simInflationVal" style="font-weight: 700; color: #2563EB;">5%</span>
+            </label>
+            <input type="range" id="simInflation" min="0" max="20" step="1" value="5" oninput="runRoiSimulation()" style="width: 100%; height: 6px; background: #E5E7EB; border-radius: 4px; outline: none; -webkit-appearance: none;" />
+          </div>
+
+          <div>
+            <label for="simUpgradeCost" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Upgrade Installation Cost (₹ / $)</label>
+            <input type="number" id="simUpgradeCost" value="40000" oninput="runRoiSimulation()" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none;" />
+          </div>
+        </div>
+
+        <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid #E5E7EB; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <div style="background: #F3F4F6; padding: 12px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 11px; font-weight: 500; color: #6B7280; text-transform: uppercase;">Simulated Capacity</div>
+            <div id="simCombinedCapacity" style="font-size: 18px; font-weight: 700; color: #111827; margin-top: 4px;">1300 W</div>
+          </div>
+          <div style="background: #EFF6FF; padding: 12px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 11px; font-weight: 500; color: #2563EB; text-transform: uppercase;">Simulated Payback</div>
+            <div id="simPayback" style="font-size: 18px; font-weight: 700; color: #2563EB; margin-top: 4px;">4.5 yrs</div>
+          </div>
+          <div style="background: #F0FDF4; padding: 12px; border-radius: 8px; text-align: center; grid-column: span 2;">
+            <div style="font-size: 11px; font-weight: 500; color: #16A34A; text-transform: uppercase;">Additional 10-Yr Savings Upgrade Increase</div>
+            <div id="simSavingsIncrease" style="font-size: 20px; font-weight: 800; color: #16A34A; margin-top: 4px;">+₹0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-card" style="padding: 24px; min-height: 320px;">
+        <div class="chart-header" style="margin-bottom: 20px;">
+          <div>
+            <div class="chart-title">10-Year Cumulative Savings Projections</div>
+            <div class="chart-subtitle">Comparing your current payback curve vs. upgrade simulation.</div>
+          </div>
+        </div>
+        <div class="chart-container" style="height: 200px;">
+          <canvas id="simulationChart" aria-label="ROI simulation projection chart"></canvas>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────
+       VIEW 2: HISTORY
+  ────────────────────────────────────────────────── -->
+  <section id="view-history" class="view" role="region" aria-label="Historical data">
+    <div class="page-header">
+      <h1>Historical Data</h1>
+      <p>Explore telemetry trends over time from your solar panel system.</p>
+    </div>
+
+    <div class="history-controls">
+      <label for="hoursSelect">Show last:</label>
+      <select id="hoursSelect" onchange="loadHistoryData(+this.value)" aria-label="Time range">
+        <option value="6">6 Hours</option>
+        <option value="24" selected>24 Hours</option>
+        <option value="48">48 Hours</option>
+        <option value="168">7 Days</option>
+        <option value="720">30 Days</option>
+      </select>
+      <button class="btn btn-outline btn-sm" onclick="loadHistoryData()">
+        🔄 Refresh
+      </button>
+    </div>
+
+    <div class="chart-grid">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Temperature &amp; Humidity</div>
+            <div class="chart-subtitle">DHT11 environmental readings</div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="historyTempChart" aria-label="Temperature history chart"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Power &amp; Current</div>
+            <div class="chart-subtitle">PZEM-004T electrical readings</div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="historyPowerChart" aria-label="Power history chart"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Light Intensity</div>
+            <div class="chart-subtitle">LDR sensor — proxy for solar irradiance</div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="historyLightChart" aria-label="Light intensity history chart"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Cumulative Energy</div>
+            <div class="chart-subtitle">kWh generated over time</div>
+          </div>
+        </div>
+        <div class="chart-container">
+          <canvas id="historyEnergyChart" aria-label="Energy history chart"></canvas>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────
+       VIEW 3: ALERTS
+  ────────────────────────────────────────────────── -->
+  <section id="view-alerts" class="view" role="region" aria-label="Alerts">
+    <div class="page-header">
+      <h1>Alert Center</h1>
+      <p>ML-generated cleaning alerts and degradation warnings for your solar panel.</p>
+    </div>
+
+    <div class="alerts-toolbar">
+      <button class="filter-btn active" data-filter="ALL"
+              onclick="setAlertFilter('ALL')" aria-pressed="true">All</button>
+      <button class="filter-btn" data-filter="CLEANING"
+              onclick="setAlertFilter('CLEANING')" aria-pressed="false">🧹 Cleaning</button>
+      <button class="filter-btn" data-filter="DEGRADATION"
+              onclick="setAlertFilter('DEGRADATION')" aria-pressed="false">📉 Degradation</button>
+      <button class="filter-btn" data-filter="UNREAD"
+              onclick="setAlertFilter('UNREAD')" aria-pressed="false">🔴 Unread</button>
+      <div style="margin-left:auto; display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn-outline btn-sm" onclick="loadAlerts()">🔄 Refresh</button>
+        <button class="btn btn-primary btn-sm" onclick="ackAllAlerts()">✅ Acknowledge All</button>
+      </div>
+    </div>
+
+    <div class="alerts-table-wrap" role="region" aria-label="Alerts table">
+      <table class="alerts-table" aria-label="Alerts list">
+        <thead>
+          <tr>
+            <th scope="col">Timestamp</th>
+            <th scope="col">Type</th>
+            <th scope="col">Severity</th>
+            <th scope="col">Message</th>
+            <th scope="col">Confidence</th>
+            <th scope="col">Action</th>
+          </tr>
+        </thead>
+        <tbody id="alertsTableBody">
+          <tr><td colspan="6">
+            <div class="empty-state">
+              <div class="empty-icon">⏳</div>
+              <p>Loading alerts…</p>
+            </div>
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────
+       VIEW 4: DEGRADATION
+  ────────────────────────────────────────────────── -->
+  <section id="view-degradation" class="view" role="region" aria-label="Degradation analysis">
+    <div class="page-header">
+      <h1>Panel Degradation Analysis</h1>
+      <p>XGBoost ML model trained on 5 years of real Kerala solar data to estimate panel health.</p>
+    </div>
+
+    <div class="degradation-grid">
+      <!-- Gauge card -->
+      <div class="deg-meter-card" role="region" aria-label="Degradation gauge">
+        <h3 style="font-size:.85rem; font-weight:700; color:var(--gray-500); text-transform:uppercase; letter-spacing:.05em; margin-bottom:20px;">
+          Current Degradation
+        </h3>
+
+        <!-- SVG Semi-circle Gauge -->
+        <div class="gauge-wrap" aria-hidden="true">
+          <svg class="gauge-svg" viewBox="-10 0 220 115" xmlns="http://www.w3.org/2000/svg">
+            <!-- Track -->
+            <path id="gaugeTrack" class="gauge-track"
+              d="M 10 100 A 90 90 0 0 1 190 100"
+              fill="none" stroke="#E5E7EB" stroke-width="18" stroke-linecap="round"/>
+            <!-- Fill -->
+            <path id="gaugeFill" class="gauge-fill"
+              d="M 10 100 A 90 90 0 0 1 190 100"
+              fill="none" stroke="#16A34A" stroke-width="18" stroke-linecap="round"
+              stroke-dasharray="283" stroke-dashoffset="283"/>
+          </svg>
+          <div class="gauge-value-text" id="gaugeValue" role="status" aria-live="polite">—%</div>
+        </div>
+
+        <div class="gauge-label-text">Degradation Level</div>
+
+        <div class="deg-trend-badge trend-stable" id="degTrend" role="status">
+          ↔ STABLE
+        </div>
+
+        <p id="degMessage" style="font-size:.8rem; color:var(--gray-500); margin-top:14px; text-align:center; line-height:1.5;">
+          Loading degradation data…
+        </p>
+
+        <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--gray-200); width:100%;">
+          <div style="font-size:.75rem; color:var(--gray-400); text-align:left; line-height:1.8;">
+            <div>🟢 &lt; 15% — Stable / Healthy</div>
+            <div>🟡 15–30% — Declining — Monitor</div>
+            <div>🔴 &gt; 30% — Critical — Replace</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Degradation chart -->
+      <div class="chart-card" style="min-height:360px;">
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">Degradation Trend Over Time</div>
+            <div class="chart-subtitle">ML model predictions from sensor readings</div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="loadDegradation()">🔄 Refresh</button>
+        </div>
+        <div class="chart-container" style="height:280px;">
+          <canvas id="degradationChart" aria-label="Degradation trend chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel Maintenance & Cleaning Logs -->
+    <div class="degradation-grid" style="margin-top: 24px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
+      <!-- Maintenance Form Card -->
+      <div class="chart-card" style="padding: 24px;">
+        <div class="chart-header" style="margin-bottom: 20px;">
+          <div>
+            <div class="chart-title">🧹 Log Panel Cleaning Activity</div>
+            <div class="chart-subtitle">Record when the panel was scrubbed or cleaned. This will reset dust alerts.</div>
+          </div>
+        </div>
+
+        <form id="maintenanceForm" onsubmit="handleMaintenanceSubmit(event)" style="display: flex; flex-direction: column; gap: 16px;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label for="maintDate" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Date &amp; Time Performed</label>
+            <input type="datetime-local" id="maintDate" required style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none;" />
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label for="maintNotes" style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">Cleaning Notes / Observations</label>
+            <textarea id="maintNotes" placeholder="e.g. Cleared heavy dust layer, washed with distilled water." required rows="3" style="width: 100%; padding: 10px 12px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 14px; box-sizing: border-box; outline: none; resize: vertical; font-family: inherit;"></textarea>
+          </div>
+
+          <button type="submit" class="btn btn-success" id="saveMaintBtn" style="padding: 10px 20px; font-size: 14px; font-weight: 600; border-radius: 8px; width: 100%; cursor: pointer;">
+            🧼 Log Cleaning Activity
+          </button>
+        </form>
+      </div>
+
+      <!-- Maintenance History Card -->
+      <div class="chart-card" style="padding: 24px; display: flex; flex-direction: column;">
+        <div class="chart-header" style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div class="chart-title">📋 Maintenance Log Timeline</div>
+            <div class="chart-subtitle">Historical record of solar panel cleaning operations.</div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="loadMaintenanceLogs()">🔄 Refresh</button>
+        </div>
+
+        <div style="flex-grow: 1; overflow-y: auto; max-height: 250px;">
+          <table class="alerts-table" style="width: 100%; font-size: 0.85rem;" aria-label="Maintenance history">
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                <th scope="col">Notes</th>
+                <th scope="col" style="text-align: center;">Degradation At Event</th>
+                <th scope="col" style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="maintenanceLogsTableBody">
+              <tr>
+                <td colspan="4" style="text-align: center; color: var(--gray-400); padding: 20px;">
+                  No maintenance activities logged yet.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ML Model Info Card -->
+    <div class="chart-card" style="max-width:800px;">
+      <div class="chart-header">
+        <div>
+          <div class="chart-title">About the ML Models</div>
+          <div class="chart-subtitle">Real data · No synthetic generation</div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-top:8px;">
+        <div>
+          <p style="font-size:.8rem; font-weight:700; color:var(--primary); margin-bottom:6px;">
+            🧹 Cleaning Alert Model — Random Forest
+          </p>
+          <p style="font-size:.82rem; color:var(--gray-600); line-height:1.6;">
+            Trained on real Indian solar plant data (2020, 34 days, ~68K readings).
+            Detects dust soiling by comparing actual power output vs. expected output
+            given irradiance levels. Features: irradiance, temperature, module temp,
+            power ratio, time of day.
+          </p>
+        </div>
+        <div>
+          <p style="font-size:.8rem; font-weight:700; color:var(--danger); margin-bottom:6px;">
+            📉 Degradation Model — XGBoost Regressor
+          </p>
+          <p style="font-size:.82rem; color:var(--gray-600); line-height:1.6;">
+            Trained on real Kerala Solar Power Dataset (2019–2024, 5 years of data).
+            Computes efficiency ratio vs. Year-1 baseline and maps it to a degradation
+            percentage. Features: irradiance, temperature, humidity, efficiency ratio,
+            years in service.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────
+       VIEW 5: REPORTS
+  ────────────────────────────────────────────────── -->
+  <section id="view-reports" class="view" role="region" aria-label="Reports">
+    <div class="page-header">
+      <h1>Download Reports</h1>
+      <p>Export telemetry, alerts, and analysis results as CSV or PDF.</p>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; max-width:900px;">
+
+      <!-- CSV Report Card -->
+      <div class="report-card" role="region" aria-label="CSV report download">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+          <div style="width:42px; height:42px; background:#F0FDF4; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.3rem;">📊</div>
+          <div>
+            <h3>CSV Export</h3>
+            <p style="margin:0; font-size:.78rem; color:var(--gray-400);">Spreadsheet data</p>
+          </div>
+        </div>
+        <p>Export all telemetry readings (light, temperature, humidity, voltage, power, energy, degradation) for the selected date range.</p>
+        <div class="date-range">
+          <div class="form-group">
+            <label for="csvStart">Start Date &amp; Time</label>
+            <input type="datetime-local" id="csvStart" class="form-control" aria-label="CSV start date" />
+          </div>
+          <div class="form-group">
+            <label for="csvEnd">End Date &amp; Time</label>
+            <input type="datetime-local" id="csvEnd" class="form-control" aria-label="CSV end date" />
+          </div>
+        </div>
+        <button id="downloadCsvBtn"
+                class="download-btn download-btn-csv w-full"
+                onclick="downloadCSVReport()"
+                aria-label="Download CSV report">
+          ⬇ Download CSV
+        </button>
+      </div>
+
+      <!-- PDF Report Card -->
+      <div class="report-card" role="region" aria-label="PDF report download">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+          <div style="width:42px; height:42px; background:#FEF2F2; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.3rem;">📄</div>
+          <div>
+            <h3>PDF Report</h3>
+            <p style="margin:0; font-size:.78rem; color:var(--gray-400);">Professional document</p>
+          </div>
+        </div>
+        <p>Generate a professional PDF report including KPI summaries, alerts list, telemetry data table, and branded header — ready for sharing.</p>
+        <div class="date-range">
+          <div class="form-group">
+            <label for="reportStart">Start Date &amp; Time</label>
+            <input type="datetime-local" id="reportStart" class="form-control" aria-label="PDF report start date" />
+          </div>
+          <div class="form-group">
+            <label for="reportEnd">End Date &amp; Time</label>
+            <input type="datetime-local" id="reportEnd" class="form-control" aria-label="PDF report end date" />
+          </div>
+        </div>
+        <button id="downloadPdfBtn"
+                class="download-btn download-btn-pdf w-full"
+                onclick="downloadReport('pdf')"
+                aria-label="Download PDF report">
+          ⬇ Download PDF
+        </button>
+      </div>
+    </div>
+
+    <!-- What's in the report -->
+    <div class="chart-card" style="max-width:900px; margin-top:24px;">
+      <div class="chart-title" style="margin-bottom:16px;">📋 What's Included in Reports</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+        <div>
+          <p style="font-size:.82rem; font-weight:700; color:var(--gray-700); margin-bottom:8px;">CSV Export</p>
+          <ul style="font-size:.82rem; color:var(--gray-600); line-height:2; padding-left:18px;">
+            <li>All telemetry readings (timestamped)</li>
+            <li>LDR light intensity (%)</li>
+            <li>DHT11 temperature &amp; humidity</li>
+            <li>PZEM-004T voltage, current, power, energy</li>
+            <li>ML predictions: cleaning flag, confidence, degradation %</li>
+          </ul>
+        </div>
+        <div>
+          <p style="font-size:.82rem; font-weight:700; color:var(--gray-700); margin-bottom:8px;">PDF Report</p>
+          <ul style="font-size:.82rem; color:var(--gray-600); line-height:2; padding-left:18px;">
+            <li>Executive summary with KPI statistics</li>
+            <li>Min / Max / Average for all sensors</li>
+            <li>Full alerts table (up to 30)</li>
+            <li>Recent telemetry data table (up to 50 rows)</li>
+            <li>Professional branded header &amp; footer</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ═══════════════════════════════════════════════════════
+     TOAST CONTAINER
+══════════════════════════════════════════════════════════ -->
+<div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="false"></div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SCRIPTS
+══════════════════════════════════════════════════════════ -->
+<script src="js/firebase.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/reports.js"></script>
+<script src="js/app.js"></script>
+
+<!-- Inline CSV button handler override -->
+<script>
+  function downloadCSVReport() {
+    const start = document.getElementById("csvStart")?.value;
+    const end   = document.getElementById("csvEnd")?.value;
+    let url = "http://localhost:8000/api/report/csv";
+    const params = new URLSearchParams();
+    if (start) params.set("start", new Date(start).toISOString());
+    if (end)   params.set("end",   new Date(end).toISOString());
+    if ([...params].length) url += "?" + params.toString();
+    const a = document.createElement("a");
+    a.href = url; a.download = "solar_report.csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    showToast("⬇ Download started", "CSV export triggered.", "info");
+  }
+
+  // Set CSV defaults on page load
+  window.addEventListener("DOMContentLoaded", () => {
+    const now   = new Date();
+    const week  = new Date(now); week.setDate(week.getDate() - 7);
+    const fmt   = d => d.toISOString().slice(0, 16);
+    const csvS  = document.getElementById("csvStart");
+    const csvE  = document.getElementById("csvEnd");
+    if (csvS) csvS.value = fmt(week);
+    if (csvE) csvE.value = fmt(now);
+  });
+</script>
+
+</body>
+</html>

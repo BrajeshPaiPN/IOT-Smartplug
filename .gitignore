@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.db
+.env
+processor_log.txt
+broadcast_log.txt
+callbacks_log.txt
+test_mqtt.py
+test_ws.py
+db_test.py
+monitor_ws.py
+firebase admin key/
