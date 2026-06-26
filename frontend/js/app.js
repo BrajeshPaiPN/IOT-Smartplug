@@ -807,17 +807,13 @@ function initApp() {
     maintDateInput.value = localNow.toISOString().slice(0, 16);
   }
 
-  // Poll stats every 5s — reliable always-on fallback regardless of WS/SSE state
-  let _lastPollTs = null;
+  // Poll stats every 5s — reliable always-on update
   setInterval(async () => {
     if (!currentUser) return;
     try {
       const resp = await fetch(`${API}/api/dashboard/stats`);
       if (!resp.ok) return;
       const data = await resp.json();
-      // Only update UI if data has actually changed (avoid flicker on same timestamp)
-      if (data.last_updated === _lastPollTs) return;
-      _lastPollTs = data.last_updated;
       updateKPIs({
         light_intensity: data.latest_light,
         temperature:     data.latest_temperature,
